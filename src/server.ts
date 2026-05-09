@@ -34,63 +34,12 @@ class PlaybackManager {
         return `${this.state.album}:${this.state.artist}:${this.state.title}:${Math.round(this.state.durationMicros / 1_000_000)}`;
     }
 
-    private async fetchLyrics() {
-        const params = new URLSearchParams({
-            track_name: this.state.title!,
-            artist_name: this.state.artist!,
-            album_name: this.state.album!,
-            duration: String(Math.round(this.state.durationMicros! / 1_000_000)),
-        });
-
-        const response = await fetch(`https://lrclib.net/api/get?${params}`, {
-            headers: {
-                accept: "application/json",
-            },
-        });
-
-        if (!response.ok) return undefined;
-
-        try {
-            const payload = await response.json();
-            const res = Value.Parse(LyricsResponseSchema, payload);
-            return res;
-        } catch { return undefined; }
-    }
-
-    // should not be backgrounded
-    private async updateLyrics() {
-        const cache = await this.cacheFile.json();
-        const key = this.getTrackKey();
-        if (!key) return;
-        const payload = cache[key];
-        try {
-            const lyrics = Value.Parse(LyricsResponseSchema, payload);
-            if (lyrics.plainLyrics) {
-                this.state.plainLyrics = lyrics.plainLyrics;
-            }
-            if (lyrics.syncedLyrics) {
-                this.state.syncedLyrics = lyrics.syncedLyrics;
-            }
-        } catch { }
-        if (!payload) {
-            console.log("cache miss")
-            void (async () => {
-                cache[key] = await this.fetchLyrics();
-                if (!cache[key]) return;
-                await this.cacheFile.write(JSON.stringify(cache));
-                // trigger a cache hit now that we have an entry
-                await this.handleNewMessage({}, true);
-            })()
-        }
-    }
-
     private async handleNewMessage(message: MediaState, diff: boolean) {
         if (!diff) {
             this.state = message;
         } else {
             this.state = { ...this.state, ...message };
         }
-        await this.updateLyrics();
         server.publish("state", JSON.stringify(this.state));
     }
 

@@ -14,8 +14,6 @@ export const MediaStateSchema = Type.Object({
   timestampEpochMicros: Type.Optional(Type.Number()),
   playbackRate: Type.Optional(Type.Number()),
   prohibitsSkip: Type.Optional(Type.Boolean()),
-  plainLyrics: Type.Optional(Type.String()),
-  syncedLyrics: Type.Optional(Type.String()),
   instrumental: Type.Optional(Type.Boolean()),
 }, { additionalProperties: true });
 

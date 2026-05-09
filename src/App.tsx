@@ -3,6 +3,11 @@ import { Texture } from "pixi.js";
 import { LyricsScene } from "./LyricsScene";
 import { useSongState } from "./useSongState";
 import overlayImage from "./generated-icons/img2.jpeg";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { persistQueryClient } from "@tanstack/react-query-persist-client";
+import { createAsyncStoragePersister } from "@tanstack/query-async-storage-persister";
+
+const queryClient = new QueryClient();
 
 const SYMBOLS = {
     play: "􀊄",
@@ -21,7 +26,7 @@ function formatTime(micros: number): string {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-export function App() {
+function App() {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<LyricsScene | null>(null);
     const artworkUrlRef = useRef<string | null>(null);
@@ -42,9 +47,8 @@ export function App() {
         artist,
         album,
         progressRatio,
-        plainLyrics,
-        syncedLyrics,
         title,
+        lyrics,
     } = useSongState();
 
     useEffect(() => {
@@ -204,7 +208,7 @@ export function App() {
         return () => {
             observer.disconnect();
         };
-    }, [imageUrl, mediaState?.durationMicros, plainLyrics, syncedLyrics, title, artist, album]);
+    }, [imageUrl, mediaState?.durationMicros, title, artist, album]);
 
     return (
         <div className="flex h-screen w-screen inset-0 fixed items-center gap-10">
@@ -240,7 +244,9 @@ export function App() {
                             <div className="h-2 w-full overflow-hidden rounded-full bg-white/20">
                                 <div
                                     className="h-full rounded-full bg-[rgba(255,245,240,0.94)]"
-                                    style={{ width: `${progressRatio * 100}%` }}
+                                    style={{
+                                        width: `${progressRatio * 100}%`,
+                                    }}
                                 />
                             </div>
                             <input
@@ -321,18 +327,40 @@ export function App() {
                         </div>
                     </div>
                 </div>
-                {
-                    syncedLyrics && plainLyrics && (
-                        <div
-                            className="max-w-100 overflow-y-auto whitespace-pre-wrap text-3xl font-semibold font-sans text-white no-scrollbar"
-                            style={{ height: albumPanelHeight || undefined }}
-                        >
-                            {syncedLyrics}
-                        </div>
-                    )
-                }
+                {lyrics.lyrics && (
+                    <div
+                        className="max-w-100 overflow-y-auto whitespace-pre-wrap text-3xl font-semibold flex gap-5 py-24 flex-col font-sans text-white no-scrollbar"
+                        style={{
+                            height: albumPanelHeight || undefined,
+                            maskImage:
+                                "linear-gradient(to bottom, transparent, black 20%, black 80%, transparent)",
+                        }}
+                    >
+                        {lyrics.lyrics.map((line, index) => (
+                            <div
+                                key={index}
+                                id={`line-${index}`}
+                                className={
+                                    "px-2" +
+                                    (lyrics.focusedIndex === index
+                                        ? ""
+                                        : " text-white/50 blur-[2px] transition-all")
+                                }
+                            >
+                                {line.text}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </section>
         </div>
     );
 }
 
+export function WrappedApp() {
+    return (
+        <QueryClientProvider client={queryClient}>
+            <App />
+        </QueryClientProvider>
+    );
+}
