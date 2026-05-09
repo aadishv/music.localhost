@@ -1,6 +1,7 @@
 import {
   Application,
   Container,
+  Graphics,
   Point,
   Sprite,
   type SpriteSource,
@@ -10,10 +11,11 @@ import { AdjustmentFilter, KawaseBlurFilter, TwistFilter } from "pixi-filters";
 export class LyricsScene {
   app: Application;
   container: Container;
+  dimOverlay: Container;
 
   blurFilters: KawaseBlurFilter[];
   twist: TwistFilter;
-    saturation: AdjustmentFilter;
+  saturation: AdjustmentFilter;
 
   paused: boolean;
 
@@ -45,8 +47,23 @@ export class LyricsScene {
         this.app.renderer.screen.height / 2,
       ),
     });
-    this.saturation = new AdjustmentFilter({ saturation: 1 });
+    // from apple music source
+    this.saturation = new AdjustmentFilter({ saturation: 2.75, brightness: 0.7, contrast: 1.9 });
     this.container.filters = [this.twist, ...this.blurFilters, this.saturation];
+
+    this.dimOverlay = new Container();
+    const blackOverlay = new Graphics();
+    blackOverlay.beginFill(0x000000, 0.5);
+    blackOverlay.drawRect(0, 0, this.app.screen.width, this.app.screen.height);
+    blackOverlay.endFill();
+
+    const whiteOverlay = new Graphics();
+    whiteOverlay.beginFill(0xffffff, 0.05);
+    whiteOverlay.drawRect(0, 0, this.app.screen.width, this.app.screen.height);
+    whiteOverlay.endFill();
+
+    this.dimOverlay.addChild(blackOverlay, whiteOverlay);
+    this.app.stage.addChild(this.dimOverlay);
 
     this.app.ticker.add(() => {
       if (this.paused) return;
@@ -129,6 +146,22 @@ export class LyricsScene {
   resize(width: number, height: number) {
     this.app.renderer.resize(width, height);
     this.twist.offset = new Point(width / 2, height / 2);
+
+    const [blackOverlay, whiteOverlay] = this.dimOverlay.children as Graphics[];
+
+    if (blackOverlay) {
+      blackOverlay.clear();
+      blackOverlay.beginFill(0x000000, 0.5);
+      blackOverlay.drawRect(0, 0, width, height);
+      blackOverlay.endFill();
+    }
+
+    if (whiteOverlay) {
+      whiteOverlay.clear();
+      whiteOverlay.beginFill(0xffffff, 0.05);
+      whiteOverlay.drawRect(0, 0, width, height);
+      whiteOverlay.endFill();
+    }
 
     const sprites = this.container.children as Sprite[];
     const [t, s, i, r] = sprites;

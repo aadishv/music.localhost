@@ -326,7 +326,7 @@ function App() {
                 </div>
                 {lyrics.lyrics && (
                     <div
-                        className="max-w-100 overflow-y-auto whitespace-pre-wrap text-3xl font-semibold flex gap-5 py-24 flex-col font-sans text-white no-scrollbar"
+                        className="max-w-100 overflow-y-auto whitespace-pre-wrap text-3xl font-bold flex gap-5 py-24 flex-col font-sans tracking-tight text-white no-scrollbar"
                         style={{
                             height: albumPanelHeight || undefined,
                             maskImage:
