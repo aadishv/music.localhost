@@ -53,7 +53,6 @@ function App() {
         favicon.href = iconHref;
     }, [imageUrl]);
 
-
     useEffect(() => {
         const isEditableTarget = (target: EventTarget | null): boolean => {
             if (!(target instanceof HTMLElement)) {
@@ -238,20 +237,27 @@ function App() {
                                 "linear-gradient(to bottom, transparent, black 20%, black 80%, transparent)",
                         }}
                     >
-                        {lyrics.lyrics.map((line, index) => (
-                            <div
-                                key={index}
-                                id={`line-${index}`}
-                                className={
-                                    "px-2" +
-                                    (lyrics.focusedIndex === index
-                                        ? ""
-                                        : " text-white/50 blur-[2px] hover:blur-none transition-all duration-300")
-                                }
-                            >
-                                {line.text}
-                            </div>
-                        ))}
+                        {lyrics.lyrics.map((line, index) => {
+                            const blur =
+                                Math.log(Math.abs((lyrics.focusedIndex ?? 0) - index) * 10 + 1);
+                            return (
+                                <div
+                                    key={index}
+                                    id={`line-${index}`}
+                                    className={
+                                        "px-2" +
+                                        (lyrics.focusedIndex === index
+                                            ? ""
+                                            : " blur-xl text-white/50 hover:blur-[0px]! transition-all duration-300")
+                                    }
+                                    style={{
+                                        filter: `blur(${blur}px)`,
+                                    }}
+                                >
+                                    {line.text}
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </section>
