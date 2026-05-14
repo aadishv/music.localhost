@@ -126,7 +126,7 @@ function App() {
         <div className="flex h-screen w-screen inset-0 fixed items-center gap-10">
             <LyricsScene artwork={imageUrl} />
             <section className="z-1 mx-auto flex items-start gap-10">
-                <div ref={albumPanelRef} className="flex max-w-100 flex-col">
+                <div ref={albumPanelRef} className="flex max-w-100 flex-col py-18">
                     <img
                         src={imageUrl ?? undefined}
                         alt="Album artwork"
@@ -245,10 +245,10 @@ function App() {
                                     key={index}
                                     id={`line-${index}`}
                                     className={
-                                        "px-2" +
+                                        "px-2 transition-all duration-300" +
                                         (lyrics.focusedIndex === index
-                                            ? ""
-                                            : " blur-xl text-white/50 hover:blur-[0px]! transition-all duration-300")
+                                            ? "text-white/80"
+                                            : "blur-xl text-white/30")
                                     }
                                     style={{
                                         filter: `blur(${blur}px)`,

@@ -4,4 +4,4 @@ Bun app that imitates the Apple Music fullscreen view on Macs using React, [medi
 
 I'll take PRs but would recommend you don't touch this codebase. It's hellish.
 
-![demo](demo.png)
+![demo](demo.jpeg)

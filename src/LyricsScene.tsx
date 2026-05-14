@@ -67,7 +67,7 @@ class PixiLyricsScene {
             contrast: 1.9,
         });
 
-        this.noise = new NoiseFilter(0.075);
+        this.noise = new NoiseFilter(0.065);
         this.container.filters = [
             this.twist,
             ...this.blurFilters,
