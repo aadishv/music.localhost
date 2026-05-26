@@ -41,6 +41,7 @@ type NormalizedPlayerState = {
   playbackState?: string;
   durationMs?: number;
   positionMs?: number;
+  measuredAtMs?: number;
   raw: unknown;
 };
 
@@ -56,6 +57,9 @@ let rpcReady = false;
 let rpcLoginPromise: Promise<void> | null = null;
 let messageProcessingPromise: Promise<void> = Promise.resolve();
 let staleActivityTimer: ReturnType<typeof setTimeout> | null = null;
+let lastActivitySignature: string | null = null;
+let lastActivityStartTimestamp: number | null = null;
+let lastActivityEndTimestamp: number | null = null;
 const clients = new Set<WebSocket>();
 
 let rpc = createRpc();
@@ -179,8 +183,6 @@ function sendCurrentStatus(targetClient?: WebSocket) {
 }
 
 async function handleMessage(message: NativeHostMessage) {
-  logExtensionEvent('received', message);
-
   if (!rpcReady && message.type !== 'INIT') {
     messageQueue.push(message);
     logExtensionEvent('queued', message);
@@ -345,6 +347,11 @@ function normalizePlayerState(playerState: unknown): NormalizedPlayerState | nul
     state.state,
   )?.toLowerCase();
 
+  const timestampEpochMicros = getFirstNumber(
+    state.timestampEpochMicros,
+    state.timestampMicros,
+  );
+
   return {
     title: getFirstString(state.title, state.songTitle, state.name),
     artist: getFirstString(state.artist, state.artistName, state.author),
@@ -359,6 +366,10 @@ function normalizePlayerState(playerState: unknown): NormalizedPlayerState | nul
     playbackState,
     durationMs: getFirstNumber(state.durationMs, state.duration),
     positionMs: getFirstNumber(state.positionMs, state.position, state.currentTimeMs),
+    measuredAtMs:
+      typeof timestampEpochMicros === 'number'
+        ? Math.round(timestampEpochMicros / 1000)
+        : undefined,
     raw: playerState,
   };
 }
@@ -373,27 +384,72 @@ function buildDiscordActivity(playerState: unknown): Activity | null {
     details: normalized.title,
     state: normalized.artist || undefined,
     largeImageKey: normalized.artworkUrl,
-    largeImageText: normalized.album || normalized.title,
+    largeImageText: normalized.album || '',
     type: 2,
   };
-
-  if (normalized.trackUrl) {
-    activity.buttons = [{ label: 'Open in YouTube Music', url: normalized.trackUrl }];
-  }
 
   if (
     typeof normalized.positionMs === 'number' &&
     typeof normalized.durationMs === 'number' &&
     normalized.durationMs > normalized.positionMs
   ) {
-    const now = Date.now();
-    activity.startTimestamp = Math.floor((now - normalized.positionMs) / 1000);
-    activity.endTimestamp = Math.floor(
-      (now + (normalized.durationMs - normalized.positionMs)) / 1000,
-    );
+    const measuredAtMs = normalized.measuredAtMs ?? Date.now();
+    const startedAtMs = measuredAtMs - normalized.positionMs;
+    const endsAtMs = startedAtMs + normalized.durationMs;
+
+    activity.startTimestamp = Math.floor(startedAtMs / 1000);
+    activity.endTimestamp = Math.floor(endsAtMs / 1000);
   }
 
   return activity;
+}
+
+function getActivitySignature(activity: Activity): string {
+  return JSON.stringify({
+    type: activity.type,
+    details: activity.details,
+    state: activity.state,
+    largeImageKey: activity.largeImageKey,
+    largeImageText: activity.largeImageText,
+    smallImageKey: activity.smallImageKey,
+    smallImageText: activity.smallImageText,
+    buttons: activity.buttons,
+  });
+}
+
+function shouldSendActivityUpdate(activity: Activity): boolean {
+  const signature = getActivitySignature(activity);
+  const sameSignature = signature === lastActivitySignature;
+
+  if (!sameSignature) {
+    return true;
+  }
+
+  if (
+    activity.startTimestamp == null ||
+    activity.endTimestamp == null ||
+    lastActivityStartTimestamp == null ||
+    lastActivityEndTimestamp == null
+  ) {
+    return false;
+  }
+
+  return (
+    Math.abs(activity.startTimestamp - lastActivityStartTimestamp) > 1 ||
+    Math.abs(activity.endTimestamp - lastActivityEndTimestamp) > 1
+  );
+}
+
+function rememberActivity(activity: Activity): void {
+  lastActivitySignature = getActivitySignature(activity);
+  lastActivityStartTimestamp = activity.startTimestamp ?? null;
+  lastActivityEndTimestamp = activity.endTimestamp ?? null;
+}
+
+function forgetActivity(): void {
+  lastActivitySignature = null;
+  lastActivityStartTimestamp = null;
+  lastActivityEndTimestamp = null;
 }
 
 async function setPlayerState(playerState: unknown) {
@@ -406,6 +462,10 @@ async function setPlayerState(playerState: unknown) {
       playerState,
     });
     await clearActivity();
+    return;
+  }
+
+  if (!shouldSendActivityUpdate(activity)) {
     return;
   }
 
@@ -425,6 +485,7 @@ async function setDiscordActivity(activityData: Activity) {
 
   try {
     rpc.setActivity(activityData);
+    rememberActivity(activityData);
     sendToExtension({
       type: 'ACTIVITY_STATUS',
       status: 'success',
@@ -452,6 +513,7 @@ async function clearActivity() {
 
   try {
     rpc.clearActivity();
+    forgetActivity();
     logExtensionEvent('activity_cleared', {});
     sendToExtension({ type: 'ACTIVITY_STATUS', status: 'cleared' });
   } catch (err) {
