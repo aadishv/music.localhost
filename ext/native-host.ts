@@ -1,4 +1,4 @@
-import RPC from '@xhayper/discord-rpc';
+import { DiscordIPC, type Activity } from './rpc.ts';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 type NativeHostMessage =
@@ -29,7 +29,7 @@ type NativeHostEventMessage =
       type: 'ACTIVITY_STATUS';
       status: 'success' | 'error' | 'cleared' | 'clear_error';
       message?: string;
-      activity?: Record<string, unknown>;
+      activity?: unknown;
     };
 
 type NormalizedPlayerState = {
@@ -46,7 +46,6 @@ type NormalizedPlayerState = {
 
 const NATIVE_HOST_VERSION = '1.0.0';
 const clientId = '1242988484671705208';
-const RPC_LOGIN_TIMEOUT = 30_000;
 const WS_HOST = process.env.YTM_RPC_WS_HOST || '127.0.0.1';
 const WS_PORT = Number(process.env.YTM_RPC_WS_PORT || 32145);
 const EXT_POLL_INTERVAL_MS = 1_500;
@@ -59,7 +58,7 @@ let messageProcessingPromise: Promise<void> = Promise.resolve();
 let staleActivityTimer: ReturnType<typeof setTimeout> | null = null;
 const clients = new Set<WebSocket>();
 
-const rpc = new RPC.Client({ clientId });
+let rpc = createRpc();
 const wss = new WebSocketServer({ host: WS_HOST, port: WS_PORT });
 
 function sendToExtension(
@@ -103,6 +102,47 @@ function armStaleActivityTimer() {
     });
     void clearActivity();
   }, STALE_ACTIVITY_TIMEOUT_MS);
+}
+
+function createRpc() {
+  const nextRpc = new DiscordIPC(clientId);
+
+  nextRpc.on('ready', () => {
+    if (rpc !== nextRpc) return;
+
+    rpcReady = true;
+    sendToExtension({
+      type: 'RPC_STATUS_UPDATE',
+      status: 'connected',
+      user: {
+        username: nextRpc.user?.username,
+        discriminator: nextRpc.user?.discriminator,
+      },
+    });
+
+    const queue = messageQueue.filter((msg) => msg.type === 'PLAYER_STATE');
+    messageQueue = [];
+
+    for (const msg of queue) {
+      void setPlayerState(msg.data);
+    }
+  });
+
+  nextRpc.on('error', (err: Error) => {
+    if (rpc !== nextRpc) return;
+
+    rpcReady = false;
+    sendToExtension({ type: 'RPC_ERROR', message: `RPC Error: ${err.message}` });
+  });
+
+  nextRpc.on('close', () => {
+    if (rpc !== nextRpc) return;
+
+    rpcReady = false;
+    sendToExtension({ type: 'RPC_STATUS_UPDATE', status: 'disconnected' });
+  });
+
+  return nextRpc;
 }
 
 function sendCurrentStatus(targetClient?: WebSocket) {
@@ -229,55 +269,27 @@ wss.on('error', (error) => {
   console.error('WebSocket server error:', error);
 });
 
-rpc.on('ready', () => {
-  rpcReady = true;
-  sendToExtension({
-    type: 'RPC_STATUS_UPDATE',
-    status: 'connected',
-    user: {
-      username: rpc.user?.username,
-      discriminator: rpc.user?.discriminator,
-    },
-  });
-
-  const queue = messageQueue.filter((msg) => msg.type === 'PLAYER_STATE');
-  messageQueue = [];
-
-  for (const msg of queue) {
-    void setPlayerState(msg.data);
-  }
-});
-
-rpc.on('error', (err: Error) => {
-  rpcReady = false;
-  sendToExtension({ type: 'RPC_ERROR', message: `RPC Error: ${err.message}` });
-});
-
-rpc.on('disconnected', () => {
-  rpcReady = false;
-  sendToExtension({ type: 'RPC_STATUS_UPDATE', status: 'disconnected' });
-});
-
 async function connectRpc(forceReconnect = false) {
   if (rpcReady && !forceReconnect) return;
   if (rpcLoginPromise) return rpcLoginPromise;
 
   rpcLoginPromise = (async () => {
     try {
-      if (forceReconnect && rpc.user && typeof rpc.user.destroy === 'function') {
-        await rpc.user.destroy().catch(() => {});
+      if (forceReconnect) {
         rpcReady = false;
+        rpc.close();
+        rpc = createRpc();
       }
 
-      await rpc.login({ clientId, timeout: RPC_LOGIN_TIMEOUT });
+      await rpc.connect();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       let errorType = 'UNKNOWN_ERROR';
       let errorMessage = error.message;
 
-      if (/timeout|TIMED_OUT|ETIMEDOUT/i.test(error.message)) {
+      if (/timeout|TIMED_OUT|ETIMEDOUT|RPC_CONNECTION_TIMEOUT/i.test(error.message)) {
         errorType = 'TIMEOUT_ERROR';
-        errorMessage = `Connection timed out after ${RPC_LOGIN_TIMEOUT / 1000} seconds`;
+        errorMessage = 'Connection timed out while waiting for Discord RPC';
       } else if (/401|Unauthorized|AUTHENTICATION_FAILED/i.test(error.message)) {
         errorType = 'AUTHENTICATION_ERROR';
         errorMessage = 'Authentication failed - check client ID and Discord credentials';
@@ -351,19 +363,18 @@ function normalizePlayerState(playerState: unknown): NormalizedPlayerState | nul
   };
 }
 
-function buildDiscordActivity(playerState: unknown) {
+function buildDiscordActivity(playerState: unknown): Activity | null {
   const normalized = normalizePlayerState(playerState);
   if (!normalized || !normalized.title || normalized.playbackState === 'paused') {
     return null;
   }
 
-  const activity: Record<string, unknown> = {
+  const activity: Activity = {
     details: normalized.title,
     state: normalized.artist || undefined,
     largeImageKey: normalized.artworkUrl,
     largeImageText: normalized.album || normalized.title,
     type: 2,
-    instance: false,
   };
 
   if (normalized.trackUrl) {
@@ -376,8 +387,10 @@ function buildDiscordActivity(playerState: unknown) {
     normalized.durationMs > normalized.positionMs
   ) {
     const now = Date.now();
-    activity.startTimestamp = new Date(now - normalized.positionMs);
-    activity.endTimestamp = new Date(now + (normalized.durationMs - normalized.positionMs));
+    activity.startTimestamp = Math.floor((now - normalized.positionMs) / 1000);
+    activity.endTimestamp = Math.floor(
+      (now + (normalized.durationMs - normalized.positionMs)) / 1000,
+    );
   }
 
   return activity;
@@ -400,18 +413,18 @@ async function setPlayerState(playerState: unknown) {
   await setDiscordActivity(activity);
 }
 
-async function setDiscordActivity(activityData: Record<string, unknown>) {
-  if (!rpcReady || !rpc.user || typeof rpc.user.setActivity !== 'function') {
+async function setDiscordActivity(activityData: Activity) {
+  if (!rpcReady) {
     sendToExtension({
       type: 'ACTIVITY_STATUS',
       status: 'error',
-      message: 'RPC client not ready or setActivity method is missing.',
+      message: 'RPC client not ready.',
     });
     return;
   }
 
   try {
-    await rpc.user.setActivity(activityData);
+    rpc.setActivity(activityData);
     sendToExtension({
       type: 'ACTIVITY_STATUS',
       status: 'success',
@@ -428,17 +441,17 @@ async function setDiscordActivity(activityData: Record<string, unknown>) {
 }
 
 async function clearActivity() {
-  if (!rpcReady || !rpc.user || typeof rpc.user.clearActivity !== 'function') {
+  if (!rpcReady) {
     sendToExtension({
       type: 'ACTIVITY_STATUS',
       status: 'clear_error',
-      message: 'RPC client not ready or clearActivity method is missing.',
+      message: 'RPC client not ready.',
     });
     return;
   }
 
   try {
-    await rpc.user.clearActivity();
+    rpc.clearActivity();
     logExtensionEvent('activity_cleared', {});
     sendToExtension({ type: 'ACTIVITY_STATUS', status: 'cleared' });
   } catch (err) {
@@ -462,14 +475,7 @@ function shutdownRpcAndExit(exitCode = 0) {
 
   wss.close();
 
-  if (rpc.user && typeof rpc.user.destroy === 'function') {
-    rpc.user
-      .destroy()
-      .catch(() => {})
-      .finally(() => process.exit(exitCode));
-    return;
-  }
-
+  rpc.close();
   process.exit(exitCode);
 }
 
